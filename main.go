@@ -32,6 +32,10 @@ import (
 	"time"
 )
 
+// version is stamped by the container build so the running binary can be
+// identified from the first log line.
+var version = "dev"
+
 type config struct {
 	addr            string
 	upstreamBase    *url.URL
@@ -107,8 +111,7 @@ func main() {
 		handleCountTokens(w, r)
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
 	mux.Handle("/", proxy)
 
@@ -117,7 +120,7 @@ func main() {
 		Handler:           logRequests(mux),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
-	log.Printf("messages-bridge listening on %s, upstream %s", cfg.addr, cfg.upstreamBase)
+	log.Printf("messages-bridge %s listening on %s, upstream %s", version, cfg.addr, cfg.upstreamBase)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("serve: %v", err)
 	}

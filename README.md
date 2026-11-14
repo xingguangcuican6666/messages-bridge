@@ -18,6 +18,14 @@ docker compose logs -f
 `docker-compose.yml` 里已经带上了日志轮转（`max-size=10m`、`max-file=3`）和
 `/healthz` 健康检查；想本地构建就把 `image:` 换成 `build: .`。
 
+更新镜像要用 `docker compose pull`，只 `up -d` 会继续用本地旧镜像。
+启动日志第一行带构建版本（git sha），`/healthz` 也会返回它，可以据此确认跑的是哪个版本：
+
+```bash
+docker compose logs | head -1
+# messages-bridge 7bc8021... listening on :8080, upstream https://api.tokenjuice.ai
+```
+
 只跑单容器：
 
 ```bash
