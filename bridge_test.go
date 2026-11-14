@@ -420,3 +420,43 @@ func TestHandleMessagesStreamsAnthropicEvents(t *testing.T) {
 		t.Errorf("stream usage = %v", usage)
 	}
 }
+
+func TestUpstreamKeyComesFromCaller(t *testing.T) {
+	cfg := testConfig()
+	cfg.upstreamKey = "configured-fallback"
+
+	cases := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{"bearer wins over configured key", map[string]string{"Authorization": "Bearer sk-from-newapi"}, "sk-from-newapi"},
+		{"x-api-key is forwarded", map[string]string{"x-api-key": "sk-anthropic-style"}, "sk-anthropic-style"},
+		{"api-key is forwarded", map[string]string{"api-key": "sk-azure-style"}, "sk-azure-style"},
+		{"configured key is the fallback", nil, "configured-fallback"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+			for name, value := range tc.headers {
+				request.Header.Set(name, value)
+			}
+			if got := resolveUpstreamKey(request, cfg); got != tc.want {
+				t.Errorf("key = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// Without a configured key the caller's credential is still forwarded, and a
+	// caller that sends nothing leaves the upstream call unauthenticated.
+	cfg.upstreamKey = ""
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	request.Header.Set("Authorization", "Bearer sk-from-newapi")
+	if got := resolveUpstreamKey(request, cfg); got != "sk-from-newapi" {
+		t.Errorf("key = %q", got)
+	}
+	bare := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{}"))
+	if got := resolveUpstreamKey(bare, cfg); got != "" {
+		t.Errorf("key = %q, want empty", got)
+	}
+}

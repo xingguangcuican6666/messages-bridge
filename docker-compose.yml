@@ -9,6 +9,7 @@ services:
     environment:
       LISTEN_ADDR: ":8080"
       UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:?UPSTREAM_BASE_URL is required}
+      # 留空：密钥由 new-api 渠道透传进来；填了也只作为无密钥调用方的兜底
       UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
       MODEL_MAP: ${MODEL_MAP:-}
       PASS_REASONING_EFFORT: ${PASS_REASONING_EFFORT:-true}

@@ -14,7 +14,9 @@ func newPassthroughProxy(cfg config) (*httputil.ReverseProxy, error) {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
 			setTargetURL(request, &target)
-			if cfg.upstreamKey != "" {
+			// The caller's credential passes through untouched; the configured
+			// key only fills in when the caller sent none.
+			if callerCredential(request.In) == "" && cfg.upstreamKey != "" {
 				request.Out.Header.Set("Authorization", "Bearer "+cfg.upstreamKey)
 			}
 		},

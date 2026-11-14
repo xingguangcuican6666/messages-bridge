@@ -118,22 +118,35 @@ func handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"input_tokens": estimateTokens(body)})
 }
 
-// resolveUpstreamKey prefers the configured upstream credential and otherwise
-// forwards whatever the calling gateway used.
+// resolveUpstreamKey forwards the credential the calling gateway attached, so
+// the key lives in new-api's channel settings instead of this service. The
+// configured key is only a fallback for callers that send no credential.
 func resolveUpstreamKey(r *http.Request, cfg config) string {
-	if cfg.upstreamKey != "" {
-		return cfg.upstreamKey
-	}
-	if auth := strings.TrimSpace(r.Header.Get("Authorization")); auth != "" {
-		if token, ok := strings.CutPrefix(auth, "Bearer "); ok {
-			return strings.TrimSpace(token)
-		}
-		return auth
-	}
-	if key := strings.TrimSpace(r.Header.Get("x-api-key")); key != "" {
+	if key := callerCredential(r); key != "" {
 		return key
 	}
-	return strings.TrimSpace(r.Header.Get("api-key"))
+	return cfg.upstreamKey
+}
+
+// callerCredential returns the credential the calling gateway attached, if any.
+func callerCredential(r *http.Request) string {
+	for _, header := range []string{"Authorization", "x-api-key", "api-key"} {
+		if key := credentialFromHeader(r.Header.Get(header)); key != "" {
+			return key
+		}
+	}
+	return ""
+}
+
+func credentialFromHeader(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if token, ok := strings.CutPrefix(trimmed, "Bearer "); ok {
+		return strings.TrimSpace(token)
+	}
+	return trimmed
 }
 
 func claudeErrorType(status int) string {
