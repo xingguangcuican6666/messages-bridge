@@ -56,17 +56,17 @@ type toolStreamState struct {
 
 // streamTranslator turns Chat Completions deltas into the Messages event stream.
 type streamTranslator struct {
-	sse       *sseWriter
-	clientMdl string
-	started   bool
-	nextBlock int
-	textIdx   int
-	textOpen  bool
-	tools     map[int]*toolStreamState
-	order     []int
-	finish    string
-	usage     openAIUsage
-	haveUsage bool
+	sse          *sseWriter
+	clientMdl    string
+	started      bool
+	nextBlock    int
+	textIdx      int
+	textOpen     bool
+	tools        map[int]*toolStreamState
+	order        []int
+	usage        openAIUsage
+	haveUsage    bool
+	finishReason string
 }
 
 func newStreamTranslator(sse *sseWriter, clientModel string) *streamTranslator {
@@ -192,7 +192,7 @@ func (t *streamTranslator) finish(id string) {
 	usage := map[string]int{"input_tokens": t.usage.PromptTokens, "output_tokens": t.usage.CompletionTokens}
 	t.sse.emit("message_delta", map[string]any{
 		"type":  "message_delta",
-		"delta": map[string]any{"stop_reason": stopReason(t.finish, len(t.tools) > 0), "stop_sequence": nil},
+		"delta": map[string]any{"stop_reason": stopReason(t.finishReason, len(t.tools) > 0), "stop_sequence": nil},
 		"usage": usage,
 	})
 	t.sse.emit("message_stop", map[string]any{"type": "message_stop"})
@@ -229,7 +229,7 @@ func translateStream(w http.ResponseWriter, body io.Reader, clientModel string) 
 		translator.noteUsage(chunk.Usage)
 		for _, choice := range chunk.Choices {
 			if choice.FinishReason != "" {
-				translator.finish = choice.FinishReason
+				translator.finishReason = choice.FinishReason
 			}
 			if text := contentText(choice.Delta.Content); text != "" {
 				translator.textDelta(upstreamID, text)
