@@ -78,6 +78,11 @@ func loadConfig() (config, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if raw := strings.TrimSpace(os.Getenv("UPSTREAM_PROXY")); raw != "" {
 		if !strings.Contains(raw, "://") {
+			// Only host:port gets the implicit scheme, so a plain word stays an
+			// error instead of silently becoming a proxy hostname.
+			if !strings.Contains(raw, ":") {
+				return cfg, fmt.Errorf("UPSTREAM_PROXY must be a proxy URL or host:port, got %q", raw)
+			}
 			raw = "http://" + raw
 		}
 		proxyURL, err := url.Parse(raw)
