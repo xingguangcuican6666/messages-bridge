@@ -12,7 +12,6 @@ import (
 func newPassthroughProxy(cfg config) (*httputil.ReverseProxy, error) {
 	target := *cfg.upstreamBase
 	proxy := &httputil.ReverseProxy{
-		Transport: cfg.transport,
 		Rewrite: func(request *httputil.ProxyRequest) {
 			setTargetURL(request, &target)
 			// The caller's credential passes through untouched; the configured
@@ -27,6 +26,9 @@ func newPassthroughProxy(cfg config) (*httputil.ReverseProxy, error) {
 			log.Printf("passthrough failed: %v", err)
 			writeClaudeError(w, http.StatusBadGateway, "api_error", "upstream request failed")
 		},
+	}
+	if cfg.transport != nil {
+		proxy.Transport = cfg.transport
 	}
 	return proxy, nil
 }

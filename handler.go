@@ -62,7 +62,12 @@ func handleMessages(w http.ResponseWriter, r *http.Request, cfg config) {
 		httpRequest.Header.Set("Accept", "application/json")
 	}
 
-	client := &http.Client{Transport: cfg.transport}
+	// A nil *http.Transport stored in the field is not a nil interface, so only
+	// set it when the config actually built one.
+	client := &http.Client{}
+	if cfg.transport != nil {
+		client.Transport = cfg.transport
+	}
 	response, err := client.Do(httpRequest)
 	if err != nil {
 		log.Printf("upstream request failed: %v", err)
