@@ -2,7 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -284,5 +287,135 @@ func TestUpstreamMessageExtraction(t *testing.T) {
 		if got := upstreamMessage([]byte(body)); got != want {
 			t.Errorf("upstreamMessage(%s) = %q, want %q", body, got, want)
 		}
+	}
+}
+
+func TestHandleMessagesEndToEnd(t *testing.T) {
+	var receivedBody []byte
+	var receivedAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("upstream path = %q", r.URL.Path)
+		}
+		receivedAuth = r.Header.Get("Authorization")
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-9","choices":[{"message":{"role":"assistant","content":"hi there"},"finish_reason":"stop"}],"usage":{"prompt_tokens":21,"completion_tokens":3,"total_tokens":24}}`))
+	}))
+	defer upstream.Close()
+
+	base, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	cfg := testConfig()
+	cfg.upstreamBase = base
+
+	requestBody := `{"model":"client-model","max_tokens":128,"top_k":40,"system":"be brief","messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(requestBody))
+	request.Header.Set("Authorization", "Bearer sk-test")
+	recorder := httptest.NewRecorder()
+
+	handleMessages(recorder, request, cfg)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if receivedAuth != "Bearer sk-test" {
+		t.Errorf("forwarded auth = %q", receivedAuth)
+	}
+	for _, forbidden := range []string{"top_k", "cache_control"} {
+		if strings.Contains(string(receivedBody), forbidden) {
+			t.Errorf("upstream body must not contain %q: %s", forbidden, receivedBody)
+		}
+	}
+	if !strings.Contains(string(receivedBody), `"role":"system"`) || !strings.Contains(string(receivedBody), `"content":"hello"`) {
+		t.Errorf("upstream body lost the converted messages: %s", receivedBody)
+	}
+
+	var response claudeResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Type != "message" || response.Model != "client-model" || response.StopReason != "end_turn" {
+		t.Errorf("response header fields = %+v", response)
+	}
+	if len(response.Content) != 1 || response.Content[0].Text != "hi there" {
+		t.Errorf("response content = %+v", response.Content)
+	}
+	if response.Usage.InputTokens != 21 || response.Usage.OutputTokens != 3 {
+		t.Errorf("response usage = %+v", response.Usage)
+	}
+}
+
+func TestHandleMessagesRelaysUpstreamError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid request"}}`))
+	}))
+	defer upstream.Close()
+
+	base, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	cfg := testConfig()
+	cfg.upstreamBase = base
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
+	recorder := httptest.NewRecorder()
+
+	handleMessages(recorder, request, cfg)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	var payload struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if payload.Type != "error" || payload.Error.Type != "invalid_request_error" || payload.Error.Message != "Invalid request" {
+		t.Errorf("error payload = %+v", payload)
+	}
+}
+
+func TestHandleMessagesStreamsAnthropicEvents(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl-2\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"id\":\"chatcmpl-2\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":1}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+
+	base, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	cfg := testConfig()
+	cfg.upstreamBase = base
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"client-model","max_tokens":8,"stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	recorder := httptest.NewRecorder()
+
+	handleMessages(recorder, request, cfg)
+
+	events := parseSSE(t, recorder.Body.String())
+	if len(events) < 5 {
+		t.Fatalf("events = %v", events)
+	}
+	if events[0].name != "message_start" || events[len(events)-1].name != "message_stop" {
+		t.Fatalf("event sequence = %v", events)
+	}
+	usage := events[len(events)-2].data["usage"].(map[string]any)
+	if usage["input_tokens"] != float64(5) || usage["output_tokens"] != float64(1) {
+		t.Errorf("stream usage = %v", usage)
 	}
 }
