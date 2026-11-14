@@ -632,3 +632,27 @@ func TestLoadConfigReadsUpstreamProxy(t *testing.T) {
 		t.Error("an invalid UPSTREAM_PROXY must be rejected")
 	}
 }
+
+func TestUpstreamMessageSurfacesContextLength(t *testing.T) {
+	body := []byte(`{"message":"Invalid request","type":"Bad Request","code":400,"details":{"type":"context_length","limit":262144,"actual":356152}}`)
+	got := upstreamMessage(body)
+	want := "prompt is too long: 356152 tokens > 262144 maximum"
+	if got != want {
+		t.Errorf("message = %q, want %q", got, want)
+	}
+}
+
+func TestEstimateTokensCountsCJK(t *testing.T) {
+	ascii := estimateTokens([]byte(strings.Repeat("a", 400)))
+	cjk := estimateTokens([]byte(strings.Repeat("中", 100)))
+
+	if ascii != 100 {
+		t.Errorf("ascii estimate = %d, want 100", ascii)
+	}
+	if cjk != 100 {
+		t.Errorf("cjk estimate = %d, want 100 (one token per character)", cjk)
+	}
+	if estimateTokens(nil) != 1 {
+		t.Errorf("empty body must still report one token")
+	}
+}

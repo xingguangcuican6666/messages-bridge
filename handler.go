@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -184,8 +185,19 @@ func upstreamMessage(body []byte) string {
 			Message string `json:"message"`
 		} `json:"error"`
 		Message string `json:"message"`
+		Details struct {
+			Type   string `json:"type"`
+			Limit  int    `json:"limit"`
+			Actual int    `json:"actual"`
+		} `json:"details"`
 	}
 	if err := json.Unmarshal(body, &nested); err == nil {
+		// A bare "Invalid request" tells the client nothing, so surface the
+		// reason the upstream attached. Context overflow is the one a client
+		// can act on: it has to compact before retrying.
+		if nested.Details.Type == "context_length" {
+			return fmt.Sprintf("prompt is too long: %d tokens > %d maximum", nested.Details.Actual, nested.Details.Limit)
+		}
 		if nested.Error.Message != "" {
 			return nested.Error.Message
 		}

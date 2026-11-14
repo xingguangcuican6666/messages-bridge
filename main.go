@@ -30,6 +30,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // version is stamped by the container build so the running binary can be
@@ -200,11 +201,18 @@ func writeClaudeError(w http.ResponseWriter, status int, errType, message string
 	})
 }
 
+// estimateTokens approximates a prompt size from the raw request body. ASCII
+// costs about a token per four characters, while CJK text costs about one token
+// per character, so counting runes keeps the estimate from under-reporting by a
+// factor of three and letting a client overrun the context window.
 func estimateTokens(body []byte) int {
-	// Rough but stable: providers count a token per few bytes of JSON text.
-	tokens := len(body) / 4
-	if tokens < 1 {
-		tokens = 1
+	tokens := 0
+	for _, char := range string(body) {
+		if char < utf8.RuneSelf {
+			tokens += 1
+			continue
+		}
+		tokens += 4
 	}
-	return tokens
+	return max(1, tokens/4)
 }
