@@ -8,10 +8,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testConfig() config {
-	return config{reasoningEffort: true}
+	return config{reasoningEffort: true, timeout: 30 * time.Second}
 }
 
 func TestConvertClaudeRequestToPureOpenAI(t *testing.T) {

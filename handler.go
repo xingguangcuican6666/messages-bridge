@@ -40,7 +40,7 @@ func handleMessages(w http.ResponseWriter, r *http.Request, cfg config) {
 	}
 
 	ctx := r.Context()
-	if !request.Stream {
+	if !request.Stream && cfg.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, cfg.timeout)
 		defer cancel()
