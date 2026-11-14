@@ -62,7 +62,7 @@ func handleMessages(w http.ResponseWriter, r *http.Request, cfg config) {
 		httpRequest.Header.Set("Accept", "application/json")
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Transport: cfg.transport}
 	response, err := client.Do(httpRequest)
 	if err != nil {
 		log.Printf("upstream request failed: %v", err)

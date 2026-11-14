@@ -561,3 +561,63 @@ func TestToolSchemaDropsUnsupportedPatterns(t *testing.T) {
 		t.Errorf("simple pattern must survive: %s", body)
 	}
 }
+
+func TestUpstreamRequestsGoThroughConfiguredProxy(t *testing.T) {
+	var proxied int
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.URL.IsAbs() {
+			t.Errorf("a proxy must receive an absolute request URI, got %q", r.URL.String())
+		}
+		proxied++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-proxy","choices":[{"message":{"role":"assistant","content":"via proxy"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`))
+	}))
+	defer proxyServer.Close()
+
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatalf("parse proxy: %v", err)
+	}
+	cfg := testConfig()
+	// .invalid never resolves, so a response proves the proxy was used.
+	cfg.upstreamBase, _ = url.Parse("http://upstream.invalid")
+	cfg.transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"m","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`))
+	recorder := httptest.NewRecorder()
+	handleMessages(recorder, request, cfg)
+
+	if proxied != 1 {
+		t.Fatalf("proxy saw %d requests, want 1", proxied)
+	}
+	var response claudeResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Content) != 1 || response.Content[0].Text != "via proxy" {
+		t.Errorf("response did not come through the proxy: %+v", response.Content)
+	}
+}
+
+func TestLoadConfigReadsUpstreamProxy(t *testing.T) {
+	t.Setenv("UPSTREAM_BASE_URL", "https://api.example.com")
+	t.Setenv("UPSTREAM_PROXY", "http://host.docker.internal:7890")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.transport == nil || cfg.transport.Proxy == nil {
+		t.Fatal("transport must carry the configured proxy")
+	}
+	request, _ := http.NewRequest(http.MethodGet, cfg.upstreamBase.String(), nil)
+	proxyURL, err := cfg.transport.Proxy(request)
+	if err != nil || proxyURL == nil || proxyURL.String() != "http://host.docker.internal:7890" {
+		t.Errorf("proxy = %v (%v)", proxyURL, err)
+	}
+
+	t.Setenv("UPSTREAM_PROXY", "not-a-url")
+	if _, err := loadConfig(); err == nil {
+		t.Error("an invalid UPSTREAM_PROXY must be rejected")
+	}
+}

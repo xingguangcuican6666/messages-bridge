@@ -12,6 +12,7 @@ import (
 func newPassthroughProxy(cfg config) (*httputil.ReverseProxy, error) {
 	target := *cfg.upstreamBase
 	proxy := &httputil.ReverseProxy{
+		Transport: cfg.transport,
 		Rewrite: func(request *httputil.ProxyRequest) {
 			setTargetURL(request, &target)
 			// The caller's credential passes through untouched; the configured

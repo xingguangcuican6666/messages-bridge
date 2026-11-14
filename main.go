@@ -44,6 +44,9 @@ type config struct {
 	reasoningEffort bool
 	timeout         time.Duration
 	logBodies       bool
+	// transport is shared by the converter and the passthrough proxy so both
+	// honour the same proxy configuration.
+	transport *http.Transport
 }
 
 func loadConfig() (config, error) {
@@ -69,6 +72,19 @@ func loadConfig() (config, error) {
 	base.Path = strings.TrimSuffix(base.Path, "/")
 	cfg.upstreamBase = base
 
+	// Clone the default transport so HTTP_PROXY / HTTPS_PROXY / NO_PROXY keep
+	// working, then let UPSTREAM_PROXY point at an explicit proxy such as the
+	// host's on http://host.docker.internal:7890.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if raw := strings.TrimSpace(os.Getenv("UPSTREAM_PROXY")); raw != "" {
+		proxyURL, err := url.Parse(raw)
+		if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
+			return cfg, fmt.Errorf("UPSTREAM_PROXY must be an absolute proxy URL, got %q", raw)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	cfg.transport = transport
+
 	if raw := strings.TrimSpace(os.Getenv("UPSTREAM_TIMEOUT")); raw != "" {
 		parsed, err := time.ParseDuration(raw)
 		if err != nil {
@@ -83,6 +99,18 @@ func loadConfig() (config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func describeProxy(cfg config) string {
+	if cfg.transport == nil || cfg.transport.Proxy == nil {
+		return "none"
+	}
+	request, _ := http.NewRequest(http.MethodGet, cfg.upstreamBase.String(), nil)
+	proxyURL, err := cfg.transport.Proxy(request)
+	if err != nil || proxyURL == nil {
+		return "none"
+	}
+	return proxyURL.String()
 }
 
 func envOr(key, fallback string) string {
@@ -120,7 +148,7 @@ func main() {
 		Handler:           logRequests(mux),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
-	log.Printf("messages-bridge %s listening on %s, upstream %s", version, cfg.addr, cfg.upstreamBase)
+	log.Printf("messages-bridge %s listening on %s, upstream %s, proxy %s", version, cfg.addr, cfg.upstreamBase, describeProxy(cfg))
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
