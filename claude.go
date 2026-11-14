@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -350,10 +351,9 @@ func cleanInputSchema(raw json.RawMessage) any {
 	return schema
 }
 
-// sanitizeSchema removes the schema declarations clients attach and empty
-// "enum" arrays. Providers reject an empty enum outright, and Claude Code emits
-// one whenever a tool argument has no allowed values left, which fails the whole
-// request with a bare "Invalid request".
+// sanitizeSchema trims a tool schema to the subset upstreams accept. Both
+// removals are load-bearing: an empty "enum" and an unsupported "pattern" each
+// fail the entire request with a bare "Invalid request".
 func sanitizeSchema(value any) {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -368,6 +368,12 @@ func sanitizeSchema(value any) {
 					continue
 				}
 			}
+			if key == "pattern" {
+				if pattern, ok := child.(string); !ok || !keepPattern(pattern) {
+					delete(typed, key)
+				}
+				continue
+			}
 			sanitizeSchema(child)
 		}
 	case []any:
@@ -375,6 +381,23 @@ func sanitizeSchema(value any) {
 			sanitizeSchema(child)
 		}
 	}
+}
+
+// keepPattern reports whether a JSON-Schema pattern survives the upstream
+// validator. Its engine has no lookaround, no backreferences, and no Unicode
+// classes, and any pattern it cannot compile rejects the whole request, so
+// patterns outside that subset are dropped rather than risk the call.
+func keepPattern(pattern string) bool {
+	if strings.Contains(pattern, "(?") || strings.Contains(pattern, `\p`) || strings.Contains(pattern, `\P`) {
+		return false
+	}
+	for digit := '1'; digit <= '9'; digit++ {
+		if strings.Contains(pattern, `\`+string(digit)) {
+			return false
+		}
+	}
+	_, err := regexp.Compile(pattern)
+	return err == nil
 }
 
 func convertToolChoice(raw json.RawMessage) any {

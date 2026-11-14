@@ -81,5 +81,8 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 
 - 请求只输出 Chat Completions 规范字段：`model` / `messages` / `max_tokens` / `temperature` / `top_p` / `stop` / `stream` / `stream_options`(仅流式) / `tools` / `tool_choice` / `reasoning_effort`。
 - 不发送 `top_k`、`cache_control`、`$schema` 等扩展字段；纯文本内容写成字符串。
+- 工具 schema 会做两处净化，因为上游对这两类内容是"整单拒绝"（返回 `{"message":"Invalid request"}`）：
+  - 删除空 `enum` 数组（Claude Code 会给没有可选值的参数发 `"enum": []`）；
+  - 删除上游正则引擎不支持的 `pattern`（前瞻/后顾/反向引用/`\p{...}` 等），简单正则原样保留。
 - `tool_result` 块转成 `role:"tool"` 消息，`tool_use` 块转成 `tool_calls`。
 - 响应侧把 `finish_reason` 映射为 `stop_reason`（`tool_calls`→`tool_use`，`length`→`max_tokens`），`prompt_tokens`/`completion_tokens` 回填为 `input_tokens`/`output_tokens`。

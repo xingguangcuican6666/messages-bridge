@@ -509,3 +509,55 @@ func TestToolSchemaDropsEmptyEnum(t *testing.T) {
 		t.Errorf("non-empty enum must survive: %s", body)
 	}
 }
+
+func TestToolSchemaDropsUnsupportedPatterns(t *testing.T) {
+	// The upstream rejects the whole request when it cannot compile a pattern,
+	// and Claude Code ships lookahead patterns in tools such as ArtifactData.
+	raw := `{
+		"model": "m",
+		"max_tokens": 64,
+		"tools": [{
+			"name": "ArtifactData",
+			"input_schema": {
+				"type": "object",
+				"properties": {
+					"collection": {"type": "string", "pattern": "^(?!\\.\\.?(?:\\/|$))[A-Za-z0-9_-]{1,200}$"},
+					"doc_id": {"type": "string", "pattern": "^(?!\\.)$"},
+					"unicode": {"type": "string", "pattern": "\\p{L}+"},
+					"backref": {"type": "string", "pattern": "(a)\\1"},
+					"simple": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+					"writes": {
+						"type": "array",
+						"items": {"type": "object", "properties": {"doc_id": {"type": "string", "pattern": "^(?!x)"}}}
+					}
+				}
+			}
+		}],
+		"messages": [{"role": "user", "content": "hi"}]
+	}`
+
+	var request claudeRequest
+	if err := json.Unmarshal([]byte(raw), &request); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	converted, err := convertClaudeToOpenAI(&request, testConfig())
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	encoded, err := json.Marshal(converted.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("marshal parameters: %v", err)
+	}
+	body := string(encoded)
+	for _, dropped := range []string{"(?!", "\\p{L}", "(a)\\1"} {
+		if strings.Contains(body, dropped) {
+			t.Errorf("pattern with %q must be dropped: %s", dropped, body)
+		}
+	}
+	if strings.Count(body, `"pattern"`) != 1 {
+		t.Errorf("only the simple pattern may survive, got: %s", body)
+	}
+	if !strings.Contains(body, `"pattern":"^[A-Za-z0-9_-]+$"`) {
+		t.Errorf("simple pattern must survive: %s", body)
+	}
+}
