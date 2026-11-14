@@ -180,35 +180,98 @@ func TestTranslateStreamEmitsAnthropicEvents(t *testing.T) {
 		t.Fatalf("translate: %v", err)
 	}
 
-	body := recorder.Body.String()
 	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
 		t.Errorf("content type = %q", got)
 	}
-	for _, event := range []string{
-		"event: message_start",
-		`"model":"client-model"`,
-		"event: content_block_start",
-		`"type":"text_delta","text":"Hel"`,
-		`"type":"text_delta","text":"lo"`,
-		`"type":"tool_use","id":"call_1","name":"Bash"`,
-		`"partial_json":"{\"cmd\""`,
-		`"partial_json":":\"ls\"}"`,
-		"event: content_block_stop",
-		"event: message_delta",
-		`"stop_reason":"tool_use"`,
-		`"usage":{"input_tokens":12,"output_tokens":5}`,
-		"event: message_stop",
-	} {
-		if !strings.Contains(body, event) {
-			t.Errorf("stream is missing %q\n%s", event, body)
+	events := parseSSE(t, recorder.Body.String())
+
+	wantNames := []string{
+		"message_start",
+		"content_block_start", "content_block_delta", "content_block_delta",
+		"content_block_stop",
+		"content_block_start", "content_block_delta", "content_block_delta",
+		"content_block_stop",
+		"message_delta",
+		"message_stop",
+	}
+	names := make([]string, 0, len(events))
+	for _, event := range events {
+		names = append(names, event.name)
+	}
+	if strings.Join(names, ",") != strings.Join(wantNames, ",") {
+		t.Fatalf("event sequence = %v\nwant %v\nraw:\n%s", names, wantNames, recorder.Body.String())
+	}
+
+	started := events[0].data["message"].(map[string]any)
+	if started["model"] != "client-model" {
+		t.Errorf("message_start model = %v", started["model"])
+	}
+
+	var textDeltas []string
+	var partialJSON []string
+	var toolStart map[string]any
+	for _, event := range events {
+		switch event.name {
+		case "content_block_start":
+			block := event.data["content_block"].(map[string]any)
+			if block["type"] == "tool_use" {
+				toolStart = block
+			}
+		case "content_block_delta":
+			delta := event.data["delta"].(map[string]any)
+			switch delta["type"] {
+			case "text_delta":
+				textDeltas = append(textDeltas, delta["text"].(string))
+			case "input_json_delta":
+				partialJSON = append(partialJSON, delta["partial_json"].(string))
+			}
 		}
 	}
-	if strings.Index(body, "event: message_start") > strings.Index(body, "event: content_block_start") {
-		t.Errorf("message_start must come first\n%s", body)
+	if strings.Join(textDeltas, "") != "Hello" {
+		t.Errorf("text deltas = %v", textDeltas)
 	}
-	if strings.Count(body, "event: message_stop") != 1 {
-		t.Errorf("expected exactly one message_stop\n%s", body)
+	if strings.Join(partialJSON, "") != `{"cmd":"ls"}` {
+		t.Errorf("tool argument fragments = %v", partialJSON)
 	}
+	if toolStart == nil || toolStart["id"] != "call_1" || toolStart["name"] != "Bash" {
+		t.Errorf("tool_use block start = %v", toolStart)
+	}
+
+	delta := events[len(events)-2].data
+	stop := delta["delta"].(map[string]any)
+	if stop["stop_reason"] != "tool_use" {
+		t.Errorf("stop_reason = %v", stop["stop_reason"])
+	}
+	usage := delta["usage"].(map[string]any)
+	if usage["input_tokens"] != float64(12) || usage["output_tokens"] != float64(5) {
+		t.Errorf("usage = %v", usage)
+	}
+}
+
+type sseEvent struct {
+	name string
+	data map[string]any
+}
+
+func parseSSE(t *testing.T, body string) []sseEvent {
+	t.Helper()
+	var events []sseEvent
+	for _, line := range strings.Split(body, "\n") {
+		if name, ok := strings.CutPrefix(line, "event: "); ok {
+			events = append(events, sseEvent{name: name})
+			continue
+		}
+		payload, ok := strings.CutPrefix(line, "data: ")
+		if !ok || len(events) == 0 {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(payload), &data); err != nil {
+			t.Fatalf("event %q has an unparsable payload: %v", events[len(events)-1].name, err)
+		}
+		events[len(events)-1].data = data
+	}
+	return events
 }
 
 func TestUpstreamMessageExtraction(t *testing.T) {
