@@ -51,7 +51,7 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 | `MODEL_MAP` | 空 | JSON 对象，客户端模型名 → 上游模型名，例如 `{"deepseek-v4.1-flash-1017-tj":"deepseek-ai/DeepSeek-V4.1-Flash-1017"}` |
 | `PASS_REASONING_EFFORT` | `true` | 是否把 `output_config.effort` 转成 `reasoning_effort` |
 | `UPSTREAM_TIMEOUT` | `10m` | 非流式请求超时 |
-| `UPSTREAM_PROXY` | 空 | 上游代理，例如 `http://host.docker.internal:7890`；留空时用容器里的 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`，都没有就直连 |
+| `UPSTREAM_PROXY` | 空 | 上游代理，可写 `192.168.31.109:7890`（裸 host:port 自动按 http 处理）或 `http://host.docker.internal:7890`；留空时用容器里的 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`，都没有就直连 |
 | `LOG_BODIES` | `false` | 是否打印转换后的上游请求体（默认关闭，避免日志把磁盘写满） |
 | `BRIDGE_PORT` | `8080` | 仅 docker compose 使用：映射到宿主机的端口 |
 
@@ -69,13 +69,17 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 上游要过代理时设 `UPSTREAM_PROXY`，转换请求和透传请求共用同一个 transport：
 
 ```bash
-# .env
-UPSTREAM_PROXY=http://host.docker.internal:7890
+# .env：宿主机开了局域网访问，直接写 IP
+UPSTREAM_PROXY=192.168.31.109:7890
 ```
 
-`docker-compose.yml` 里已经加了 `host.docker.internal:host-gateway`，所以容器里能
-用这个名字指到宿主机。注意容器里的 `127.0.0.1` 是容器自己，填 `http://127.0.0.1:7890`
-是连不上的；要么用 `host.docker.internal`，要么把 `network_mode` 换成 `host`。
+两种写法都行：
+
+- `192.168.31.109:7890` —— 宿主机 LAN IP，代理允许局域网访问时用这个（不写 `http://` 会自动补上）
+- `http://host.docker.internal:7890` —— 代理只监听 `127.0.0.1` 时用这个；
+  `docker-compose.yml` 里已经加了 `host.docker.internal:host-gateway`
+
+注意容器里的 `127.0.0.1` 是容器自己，填 `127.0.0.1:7890` 连不上。
 
 不填 `UPSTREAM_PROXY` 时沿用容器里的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
 （Go 的默认行为），都没有就直连。启动日志会打印实际生效的代理：
