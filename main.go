@@ -73,13 +73,16 @@ func loadConfig() (config, error) {
 	cfg.upstreamBase = base
 
 	// Clone the default transport so HTTP_PROXY / HTTPS_PROXY / NO_PROXY keep
-	// working, then let UPSTREAM_PROXY point at an explicit proxy such as the
-	// host's on http://host.docker.internal:7890.
+	// working, then let UPSTREAM_PROXY point at an explicit proxy. A bare
+	// host:port is accepted and read as http, so 192.168.31.109:7890 works.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if raw := strings.TrimSpace(os.Getenv("UPSTREAM_PROXY")); raw != "" {
+		if !strings.Contains(raw, "://") {
+			raw = "http://" + raw
+		}
 		proxyURL, err := url.Parse(raw)
 		if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
-			return cfg, fmt.Errorf("UPSTREAM_PROXY must be an absolute proxy URL, got %q", raw)
+			return cfg, fmt.Errorf("UPSTREAM_PROXY must be a proxy URL or host:port, got %q", raw)
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}

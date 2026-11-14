@@ -616,6 +616,17 @@ func TestLoadConfigReadsUpstreamProxy(t *testing.T) {
 		t.Errorf("proxy = %v (%v)", proxyURL, err)
 	}
 
+	// A bare host:port is what people type for a LAN proxy; it must read as http.
+	t.Setenv("UPSTREAM_PROXY", "192.168.31.109:7890")
+	cfg, err = loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig with bare host:port: %v", err)
+	}
+	proxyURL, err = cfg.transport.Proxy(request)
+	if err != nil || proxyURL == nil || proxyURL.String() != "http://192.168.31.109:7890" {
+		t.Errorf("bare host:port proxy = %v (%v)", proxyURL, err)
+	}
+
 	t.Setenv("UPSTREAM_PROXY", "not-a-url")
 	if _, err := loadConfig(); err == nil {
 		t.Error("an invalid UPSTREAM_PROXY must be rejected")
