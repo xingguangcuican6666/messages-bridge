@@ -1,0 +1,28 @@
+services:
+  messages-bridge:
+    image: ghcr.io/xingguangcuican6666/messages-bridge:latest
+    # 想本地构建就把下面一行换成 build: .
+    container_name: messages-bridge
+    restart: unless-stopped
+    ports:
+      - "${BRIDGE_PORT:-8080}:8080"
+    environment:
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:?请设置 UPSTREAM_BASE_URL，例如 https://api.tokenjuice.ai}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
+      MODEL_MAP: ${MODEL_MAP:-}
+      PASS_REASONING_EFFORT: ${PASS_REASONING_EFFORT:-true}
+      UPSTREAM_TIMEOUT: ${UPSTREAM_TIMEOUT:-10m}
+      LOG_BODIES: ${LOG_BODIES:-false}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    # 日志轮转：桥接服务的请求日志默认很小，这里再兜一层上限
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -7,7 +7,18 @@
 也能给 Claude Code 之类的 Messages 客户端用；同时上游返回什么就透传什么，
 不受网关自身转换逻辑影响。
 
-## 快速开始
+## 快速开始（docker compose）
+
+```bash
+cp .env.example .env   # 填 UPSTREAM_BASE_URL / UPSTREAM_API_KEY / MODEL_MAP
+docker compose up -d
+docker compose logs -f
+```
+
+`docker-compose.yml` 里已经带上了日志轮转（`max-size=10m`、`max-file=3`）和
+`/healthz` 健康检查；想本地构建就把 `image:` 换成 `build: .`。
+
+只跑单容器：
 
 ```bash
 docker run -d --name messages-bridge -p 8080:8080 \
@@ -16,7 +27,7 @@ docker run -d --name messages-bridge -p 8080:8080 \
   ghcr.io/xingguangcuican6666/messages-bridge:latest
 ```
 
-或本地：
+或本地直接跑：
 
 ```bash
 UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
@@ -32,7 +43,8 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 | `MODEL_MAP` | 空 | JSON 对象，客户端模型名 → 上游模型名，例如 `{"deepseek-v4.1-flash-1017-tj":"deepseek-ai/DeepSeek-V4.1-Flash-1017"}` |
 | `PASS_REASONING_EFFORT` | `true` | 是否把 `output_config.effort` 转成 `reasoning_effort` |
 | `UPSTREAM_TIMEOUT` | `10m` | 非流式请求超时 |
-| `LOG_BODIES` | `false` | 是否打印转换后的上游请求体 |
+| `LOG_BODIES` | `false` | 是否打印转换后的上游请求体（默认关闭，避免日志把磁盘写满） |
+| `BRIDGE_PORT` | `8080` | 仅 docker compose 使用：映射到宿主机的端口 |
 
 ## 路由
 
