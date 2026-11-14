@@ -333,8 +333,8 @@ func joinTextParts(parts []any) (string, bool) {
 	return strings.Join(texts, "\n"), true
 }
 
-// cleanInputSchema drops the JSON-Schema declaration Anthropic clients attach,
-// which is not part of the Chat Completions tool contract.
+// cleanInputSchema turns an Anthropic input_schema into the JSON-Schema subset
+// upstreams actually accept.
 func cleanInputSchema(raw json.RawMessage) any {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
@@ -343,11 +343,38 @@ func cleanInputSchema(raw json.RawMessage) any {
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		return json.RawMessage(raw)
 	}
-	delete(schema, "$schema")
+	sanitizeSchema(schema)
 	if len(schema) == 0 {
 		return nil
 	}
 	return schema
+}
+
+// sanitizeSchema removes the schema declarations clients attach and empty
+// "enum" arrays. Providers reject an empty enum outright, and Claude Code emits
+// one whenever a tool argument has no allowed values left, which fails the whole
+// request with a bare "Invalid request".
+func sanitizeSchema(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == "$schema" {
+				delete(typed, key)
+				continue
+			}
+			if key == "enum" {
+				if values, ok := child.([]any); ok && len(values) == 0 {
+					delete(typed, key)
+					continue
+				}
+			}
+			sanitizeSchema(child)
+		}
+	case []any:
+		for _, child := range typed {
+			sanitizeSchema(child)
+		}
+	}
 }
 
 func convertToolChoice(raw json.RawMessage) any {

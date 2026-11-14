@@ -460,3 +460,52 @@ func TestUpstreamKeyComesFromCaller(t *testing.T) {
 		t.Errorf("key = %q, want empty", got)
 	}
 }
+
+func TestToolSchemaDropsEmptyEnum(t *testing.T) {
+	// Claude Code emits "enum": [] for arguments that lost every allowed value,
+	// and the upstream rejects the entire request with a bare "Invalid request".
+	raw := `{
+		"model": "m",
+		"max_tokens": 64,
+		"tools": [{
+			"name": "Bash",
+			"input_schema": {
+				"$schema": "http://json-schema.org/draft-07/schema#",
+				"type": "object",
+				"properties": {
+					"command": {"type": "string"},
+					"effort": {"type": "string", "enum": []},
+					"nested": {
+						"$schema": "http://json-schema.org/draft-07/schema#",
+						"type": "object",
+						"properties": {"mode": {"enum": []}, "level": {"enum": ["low", "high"]}}
+					}
+				}
+			}
+		}],
+		"messages": [{"role": "user", "content": "hi"}]
+	}`
+
+	var request claudeRequest
+	if err := json.Unmarshal([]byte(raw), &request); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	converted, err := convertClaudeToOpenAI(&request, testConfig())
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	encoded, err := json.Marshal(converted.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("marshal parameters: %v", err)
+	}
+	body := string(encoded)
+	if strings.Contains(body, `"enum":[]`) {
+		t.Errorf("empty enum must be stripped: %s", body)
+	}
+	if strings.Contains(body, "$schema") {
+		t.Errorf("nested $schema must be stripped: %s", body)
+	}
+	if !strings.Contains(body, `"enum":["low","high"]`) {
+		t.Errorf("non-empty enum must survive: %s", body)
+	}
+}
