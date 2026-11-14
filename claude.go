@@ -69,12 +69,19 @@ type claudeResponse struct {
 }
 
 type claudeOutBlock struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Input any    `json:"input,omitempty"`
+	Type      string `json:"type"`
+	Text      string `json:"text,omitempty"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Input     any    `json:"input,omitempty"`
 }
+
+// thinkingSignature stands in for the signature Anthropic attaches to thinking
+// blocks. Clients replay it in later turns, and the conversion back to Chat
+// Completions drops thinking blocks, so a stable placeholder is enough.
+const thinkingSignature = "messages-bridge"
 
 type claudeUsage struct {
 	InputTokens  int `json:"input_tokens"`

@@ -60,6 +60,8 @@ type streamTranslator struct {
 	clientMdl    string
 	started      bool
 	nextBlock    int
+	thinkingIdx  int
+	thinkingOpen bool
 	textIdx      int
 	textOpen     bool
 	tools        map[int]*toolStreamState
@@ -70,7 +72,13 @@ type streamTranslator struct {
 }
 
 func newStreamTranslator(sse *sseWriter, clientModel string) *streamTranslator {
-	return &streamTranslator{sse: sse, clientMdl: clientModel, textIdx: -1, tools: map[int]*toolStreamState{}}
+	return &streamTranslator{
+		sse:         sse,
+		clientMdl:   clientModel,
+		thinkingIdx: -1,
+		textIdx:     -1,
+		tools:       map[int]*toolStreamState{},
+	}
 }
 
 func (t *streamTranslator) start(id string) {
@@ -93,6 +101,47 @@ func (t *streamTranslator) start(id string) {
 	})
 }
 
+func (t *streamTranslator) closeThinking() {
+	if !t.thinkingOpen {
+		return
+	}
+	t.sse.emit("content_block_delta", map[string]any{
+		"type":  "content_block_delta",
+		"index": t.thinkingIdx,
+		"delta": map[string]any{"type": "signature_delta", "signature": thinkingSignature},
+	})
+	t.sse.emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": t.thinkingIdx})
+	t.thinkingOpen = false
+}
+
+// thinkingDelta streams the upstream chain of thought. Thinking must precede
+// the answer, so reasoning that arrives after content is dropped rather than
+// producing an out-of-order block.
+func (t *streamTranslator) thinkingDelta(id, text string) {
+	if text == "" {
+		return
+	}
+	t.start(id)
+	if !t.thinkingOpen {
+		if t.nextBlock > 0 {
+			return
+		}
+		t.thinkingIdx = t.nextBlock
+		t.nextBlock++
+		t.sse.emit("content_block_start", map[string]any{
+			"type":          "content_block_start",
+			"index":         t.thinkingIdx,
+			"content_block": map[string]any{"type": "thinking", "thinking": ""},
+		})
+		t.thinkingOpen = true
+	}
+	t.sse.emit("content_block_delta", map[string]any{
+		"type":  "content_block_delta",
+		"index": t.thinkingIdx,
+		"delta": map[string]any{"type": "thinking_delta", "thinking": text},
+	})
+}
+
 func (t *streamTranslator) closeText() {
 	if !t.textOpen {
 		return
@@ -106,6 +155,7 @@ func (t *streamTranslator) textDelta(id, text string) {
 		return
 	}
 	t.start(id)
+	t.closeThinking()
 	if !t.textOpen {
 		t.textIdx = t.nextBlock
 		t.nextBlock++
@@ -146,6 +196,7 @@ func (t *streamTranslator) toolDelta(id string, call openAIToolCall) {
 		if state.name == "" && arguments == "" {
 			return
 		}
+		t.closeThinking()
 		t.closeText()
 		state.blockIdx = t.nextBlock
 		t.nextBlock++
@@ -181,6 +232,7 @@ func (t *streamTranslator) noteUsage(usage *openAIUsage) {
 
 func (t *streamTranslator) finish(id string) {
 	t.start(id)
+	t.closeThinking()
 	t.closeText()
 	for _, index := range t.order {
 		state := t.tools[index]
@@ -231,6 +283,7 @@ func translateStream(w http.ResponseWriter, body io.Reader, clientModel string) 
 			if choice.FinishReason != "" {
 				translator.finishReason = choice.FinishReason
 			}
+			translator.thinkingDelta(upstreamID, choice.Delta.ReasoningContent)
 			if text := contentText(choice.Delta.Content); text != "" {
 				translator.textDelta(upstreamID, text)
 			}
@@ -284,9 +337,12 @@ func writeSyntheticStream(w http.ResponseWriter, resp *claudeResponse) error {
 	translator.start(resp.ID)
 	for _, block := range resp.Content {
 		switch block.Type {
+		case "thinking":
+			translator.thinkingDelta(resp.ID, block.Thinking)
 		case "text":
 			translator.textDelta(resp.ID, block.Text)
 		case "tool_use":
+			translator.closeThinking()
 			translator.closeText()
 			blockIdx := translator.nextBlock
 			translator.nextBlock++
@@ -309,6 +365,7 @@ func writeSyntheticStream(w http.ResponseWriter, resp *claudeResponse) error {
 			sse.emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": blockIdx})
 		}
 	}
+	translator.closeThinking()
 	translator.closeText()
 	sse.emit("message_delta", map[string]any{
 		"type":  "message_delta",

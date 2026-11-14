@@ -656,3 +656,77 @@ func TestEstimateTokensCountsCJK(t *testing.T) {
 		t.Errorf("empty body must still report one token")
 	}
 }
+
+func TestConvertOpenAIResponseEmitsThinking(t *testing.T) {
+	raw := `{
+		"id": "chatcmpl-think",
+		"choices": [{"message": {"role":"assistant","reasoning_content":"Let me think about it.","content":"Answer."},"finish_reason":"stop"}],
+		"usage": {"prompt_tokens": 5, "completion_tokens": 9, "total_tokens": 14}
+	}`
+	var completion openAIResponse
+	if err := json.Unmarshal([]byte(raw), &completion); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	response := convertOpenAIToClaude(&completion, "m")
+	if len(response.Content) != 2 {
+		t.Fatalf("content blocks = %+v", response.Content)
+	}
+	thinking := response.Content[0]
+	if thinking.Type != "thinking" || thinking.Thinking != "Let me think about it." || thinking.Signature == "" {
+		t.Errorf("thinking block = %+v", thinking)
+	}
+	if response.Content[1].Type != "text" || response.Content[1].Text != "Answer." {
+		t.Errorf("text block = %+v", response.Content[1])
+	}
+}
+
+func TestTranslateStreamEmitsThinkingBeforeAnswer(t *testing.T) {
+	upstream := strings.Join([]string{
+		`data: {"id":"chatcmpl-t","choices":[{"delta":{"role":"assistant","reasoning_content":"pondering"}}]}`,
+		"",
+		`data: {"id":"chatcmpl-t","choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`,
+		"",
+		`data: {"id":"chatcmpl-t","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":6}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+
+	recorder := httptest.NewRecorder()
+	if err := translateStream(recorder, strings.NewReader(upstream), "client-model"); err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+
+	events := parseSSE(t, recorder.Body.String())
+	names := make([]string, 0, len(events))
+	for _, event := range events {
+		names = append(names, event.name)
+	}
+	want := []string{
+		"message_start",
+		"content_block_start", "content_block_delta", "content_block_delta", "content_block_stop",
+		"content_block_start", "content_block_delta", "content_block_stop",
+		"message_delta", "message_stop",
+	}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("event sequence = %v, want %v\n%s", names, want, recorder.Body.String())
+	}
+
+	block := events[1].data["content_block"].(map[string]any)
+	if block["type"] != "thinking" {
+		t.Errorf("first block must be thinking, got %v", block)
+	}
+	first := events[2].data["delta"].(map[string]any)
+	if first["type"] != "thinking_delta" || first["thinking"] != "pondering" {
+		t.Errorf("thinking delta = %v", first)
+	}
+	signature := events[3].data["delta"].(map[string]any)
+	if signature["type"] != "signature_delta" || signature["signature"] == "" {
+		t.Errorf("signature delta = %v", signature)
+	}
+	answer := events[6].data["delta"].(map[string]any)
+	if answer["type"] != "text_delta" || answer["text"] != "done" {
+		t.Errorf("text delta = %v", answer)
+	}
+}

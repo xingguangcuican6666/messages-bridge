@@ -72,4 +72,7 @@ type openAIResponseMessage struct {
 	Role      string           `json:"role"`
 	Content   any              `json:"content"`
 	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
+	// ReasoningContent carries the upstream's chain of thought; providers that
+	// support it stream it before the answer.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }

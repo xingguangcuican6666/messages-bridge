@@ -26,6 +26,11 @@ func convertOpenAIToClaude(resp *openAIResponse, clientModel string) *claudeResp
 	}
 
 	choice := resp.Choices[0]
+	// Anthropic puts thinking ahead of the answer, and clients render it as the
+	// collapsible chain of thought.
+	if reasoning := choice.Message.ReasoningContent; reasoning != "" {
+		out.Content = append(out.Content, claudeOutBlock{Type: "thinking", Thinking: reasoning, Signature: thinkingSignature})
+	}
 	if text := contentText(choice.Message.Content); text != "" {
 		out.Content = append(out.Content, claudeOutBlock{Type: "text", Text: text})
 	}
