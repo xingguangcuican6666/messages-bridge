@@ -50,6 +50,7 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 | `UPSTREAM_API_KEY` | 空 | **兜底密钥**：正常情况下留空，由 new-api 渠道把密钥放在 `Authorization` / `x-api-key` / `api-key` 里传进来并原样转发；只有调用方不带密钥时才用它 |
 | `MODEL_MAP` | 空 | JSON 对象，客户端模型名 → 上游模型名，例如 `{"deepseek-v4.1-flash-1017-tj":"deepseek-ai/DeepSeek-V4.1-Flash-1017"}` |
 | `PASS_REASONING_EFFORT` | `true` | 是否把 `output_config.effort` 转成 `reasoning_effort` |
+| `UPSTREAM_API` | `chat_completions` | `/v1/messages` 的上游协议：`chat_completions`（默认）或 `responses`（调用 `/v1/responses`） |
 | `UPSTREAM_TIMEOUT` | `10m` | 非流式请求超时 |
 | `UPSTREAM_PROXY` | 空 | 上游代理，可写 `192.168.31.109:7890`（裸 host:port 自动按 http 处理）或 `http://host.docker.internal:7890`；留空时用容器里的 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`，都没有就直连 |
 | `LOG_BODIES` | `false` | 是否打印转换后的上游请求体（默认关闭，避免日志把磁盘写满） |
@@ -59,7 +60,7 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 
 | 路径 | 行为 |
 | --- | --- |
-| `POST /v1/messages` | Messages → Chat Completions，回答再转回 Messages（含流式、tool_use/tool_calls、usage 回填） |
+| `POST /v1/messages` | 默认 Messages → Chat Completions，设置 `UPSTREAM_API=responses` 后改走 OpenAI Responses API；回答均转回 Messages（支持非流式和流式响应） |
 | `POST /v1/messages/count_tokens` | 按请求体长度粗估 token 数 |
 | `GET /healthz` | 健康检查 |
 | 其他所有路径 | 原样透传到 `UPSTREAM_BASE_URL`（含 `/v1/chat/completions` 流式） |

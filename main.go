@@ -43,6 +43,7 @@ type config struct {
 	upstreamKey     string
 	modelMap        map[string]string
 	reasoningEffort bool
+	responsesAPI    bool
 	timeout         time.Duration
 	logBodies       bool
 	// transport is shared by the converter and the passthrough proxy so both
@@ -58,6 +59,12 @@ func loadConfig() (config, error) {
 		timeout:         10 * time.Minute,
 		logBodies:       envOr("LOG_BODIES", "false") == "true",
 	}
+
+	api := strings.ToLower(envOr("UPSTREAM_API", "chat_completions"))
+	if api != "chat_completions" && api != "responses" {
+		return cfg, fmt.Errorf("UPSTREAM_API must be chat_completions or responses, got %q", api)
+	}
+	cfg.responsesAPI = api == "responses"
 
 	rawBase := strings.TrimSpace(os.Getenv("UPSTREAM_BASE_URL"))
 	if rawBase == "" {
@@ -142,6 +149,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.responsesAPI {
+			handleMessagesResponses(w, r, cfg)
+			return
+		}
 		handleMessages(w, r, cfg)
 	})
 	mux.HandleFunc("POST /v1/messages/count_tokens", func(w http.ResponseWriter, r *http.Request) {
