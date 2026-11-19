@@ -23,8 +23,17 @@ docker compose logs -f
 
 ```bash
 docker compose logs | head -1
-# messages-bridge 7bc8021... listening on :8080, upstream https://api.tokenjuice.ai
+# messages-bridge 7bc8021... listening on :8080, upstream https://api.tokenjuice.ai, api chat_completions, proxy none
 ```
+
+改用 Responses API 时要动 `.env` 里的 `UPSTREAM_API`，并且让容器真正拿到新环境变量：
+只 `docker compose up -d` 不会重建容器，旧容器里的环境变量仍然生效。完整流程是
+
+```bash
+docker compose pull && docker compose up -d --force-recreate
+```
+
+启动日志里的 `api` 字段就是实际生效的协议，可据此确认开关有没有被读到。
 
 只跑单容器：
 
@@ -50,7 +59,7 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 | `UPSTREAM_API_KEY` | 空 | **兜底密钥**：正常情况下留空，由 new-api 渠道把密钥放在 `Authorization` / `x-api-key` / `api-key` 里传进来并原样转发；只有调用方不带密钥时才用它 |
 | `MODEL_MAP` | 空 | JSON 对象，客户端模型名 → 上游模型名，例如 `{"deepseek-v4.1-flash-1017-tj":"deepseek-ai/DeepSeek-V4.1-Flash-1017"}` |
 | `PASS_REASONING_EFFORT` | `true` | 是否把 `output_config.effort` 转成 `reasoning_effort` |
-| `UPSTREAM_API` | `chat_completions` | `/v1/messages` 的上游协议：`chat_completions`（默认）或 `responses`（调用 `/v1/responses`） |
+| `UPSTREAM_API` | `chat_completions` | `/v1/messages` 的上游协议：`chat_completions`（默认）或 `responses`（调用 `/v1/responses`）。docker compose 部署时必须改 `.env`，并在改完后重建容器 |
 | `UPSTREAM_TIMEOUT` | `10m` | 非流式请求超时 |
 | `UPSTREAM_PROXY` | 空 | 上游代理，可写 `192.168.31.109:7890`（裸 host:port 自动按 http 处理）或 `http://host.docker.internal:7890`；留空时用容器里的 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`，都没有就直连 |
 | `LOG_BODIES` | `false` | 是否打印转换后的上游请求体（默认关闭，避免日志把磁盘写满） |

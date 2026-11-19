@@ -88,3 +88,54 @@ func TestLoadConfigUpstreamAPIMode(t *testing.T) {
 		t.Fatal("invalid UPSTREAM_API must be rejected")
 	}
 }
+
+// The switch lives in route wiring, so exercise it through the same mux main
+// serves rather than calling a handler directly.
+func TestNewMuxRoutesToSelectedUpstreamAPI(t *testing.T) {
+	cases := []struct {
+		name        string
+		responses   bool
+		wantPath    string
+		upstreamRes string
+	}{
+		{
+			name:        "chat completions",
+			wantPath:    "/v1/chat/completions",
+			upstreamRes: `{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+		},
+		{
+			name:        "responses",
+			responses:   true,
+			wantPath:    "/v1/responses",
+			upstreamRes: `{"id":"resp_1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var gotPath string
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(testCase.upstreamRes))
+			}))
+			defer upstream.Close()
+
+			base, _ := url.Parse(upstream.URL)
+			cfg := testConfig()
+			cfg.upstreamBase = base
+			cfg.responsesAPI = testCase.responses
+
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+			newMux(cfg, http.NotFoundHandler()).ServeHTTP(recorder, request)
+
+			if gotPath != testCase.wantPath {
+				t.Fatalf("upstream path = %q, want %q", gotPath, testCase.wantPath)
+			}
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}

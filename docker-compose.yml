@@ -16,6 +16,9 @@ services:
       UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
       MODEL_MAP: ${MODEL_MAP:-}
       PASS_REASONING_EFFORT: ${PASS_REASONING_EFFORT:-true}
+      # /v1/messages 上游协议：chat_completions（默认）或 responses。
+      # .env 只会用于这里的插值，不写进 environment 容器里就没有这个变量。
+      UPSTREAM_API: ${UPSTREAM_API:-chat_completions}
       UPSTREAM_TIMEOUT: ${UPSTREAM_TIMEOUT:-10m}
       # 走宿主机代理时填 http://host.docker.internal:7890；留空则用容器里的
       # HTTP_PROXY / HTTPS_PROXY / NO_PROXY，都没有就直连

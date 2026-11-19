@@ -147,6 +147,20 @@ func main() {
 		log.Fatalf("proxy: %v", err)
 	}
 
+	server := &http.Server{
+		Addr:              cfg.addr,
+		Handler:           logRequests(newMux(cfg, proxy)),
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	log.Printf("messages-bridge %s listening on %s, upstream %s, api %s, proxy %s", version, cfg.addr, cfg.upstreamBase, upstreamAPIName(cfg), describeProxy(cfg))
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatalf("serve: %v", err)
+	}
+}
+
+// newMux wires the routes main serves. Keeping it separate lets a test exercise
+// the same routing the server uses, including the UPSTREAM_API switch.
+func newMux(cfg config, proxy http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		if cfg.responsesAPI {
@@ -162,16 +176,14 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
 	mux.Handle("/", proxy)
+	return mux
+}
 
-	server := &http.Server{
-		Addr:              cfg.addr,
-		Handler:           logRequests(mux),
-		ReadHeaderTimeout: 30 * time.Second,
+func upstreamAPIName(cfg config) string {
+	if cfg.responsesAPI {
+		return "responses"
 	}
-	log.Printf("messages-bridge %s listening on %s, upstream %s, proxy %s", version, cfg.addr, cfg.upstreamBase, describeProxy(cfg))
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("serve: %v", err)
-	}
+	return "chat_completions"
 }
 
 func logRequests(next http.Handler) http.Handler {
