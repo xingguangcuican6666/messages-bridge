@@ -18,7 +18,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 // Command messages-bridge sits between an API gateway and an OpenAI-compatible
 // upstream. Anthropic Messages requests are converted to Chat Completions on the
 // way out and the answer is converted back, so a Claude client can talk to an
-// upstream that only speaks OpenAI. Every other path is proxied unchanged.
+// upstream that only speaks OpenAI. Other paths are proxied unchanged unless the
+// optional stateless Responses compatibility mode is enabled.
 package main
 
 import (
@@ -38,14 +39,16 @@ import (
 var version = "dev"
 
 type config struct {
-	addr            string
-	upstreamBase    *url.URL
-	upstreamKey     string
-	modelMap        map[string]string
-	reasoningEffort bool
-	responsesAPI    bool
-	timeout         time.Duration
-	logBodies       bool
+	addr                      string
+	upstreamBase              *url.URL
+	upstreamKey               string
+	modelMap                  map[string]string
+	reasoningEffort           bool
+	responsesAPI              bool
+	responsesStateless        bool
+	responsesStatelessHeaders []string
+	timeout                   time.Duration
+	logBodies                 bool
 	// transport is shared by the converter and the passthrough proxy so both
 	// honour the same proxy configuration.
 	transport *http.Transport
@@ -65,6 +68,19 @@ func loadConfig() (config, error) {
 		return cfg, fmt.Errorf("UPSTREAM_API must be chat_completions or responses, got %q", api)
 	}
 	cfg.responsesAPI = api == "responses"
+
+	switch strings.ToLower(envOr("RESPONSES_STATELESS", "false")) {
+	case "true":
+		cfg.responsesStateless = true
+	case "false":
+	default:
+		return cfg, fmt.Errorf("RESPONSES_STATELESS must be true or false")
+	}
+	headers, err := parseResponsesStatelessHeaders(os.Getenv("RESPONSES_STATELESS_DROP_HEADERS"))
+	if err != nil {
+		return cfg, err
+	}
+	cfg.responsesStatelessHeaders = headers
 
 	rawBase := strings.TrimSpace(os.Getenv("UPSTREAM_BASE_URL"))
 	if rawBase == "" {
@@ -152,7 +168,7 @@ func main() {
 		Handler:           logRequests(newMux(cfg, proxy)),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
-	log.Printf("messages-bridge %s listening on %s, upstream %s, api %s, proxy %s", version, cfg.addr, cfg.upstreamBase, upstreamAPIName(cfg), describeProxy(cfg))
+	log.Printf("messages-bridge %s listening on %s, upstream %s, api %s, proxy %s, responses_stateless %t", version, cfg.addr, cfg.upstreamBase, upstreamAPIName(cfg), describeProxy(cfg), cfg.responsesStateless)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
@@ -175,7 +191,7 @@ func newMux(cfg config, proxy http.Handler) *http.ServeMux {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": version})
 	})
-	mux.Handle("/", proxy)
+	mux.Handle("/", withResponsesStateless(proxy, cfg))
 	return mux
 }
 

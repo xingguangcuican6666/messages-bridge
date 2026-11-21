@@ -1,7 +1,8 @@
 # messages-bridge
 
 一个极小的协议桥：把 Anthropic **Messages** 请求翻成 OpenAI **Chat Completions**
-发出去，再把回答翻回 Messages 返回。其余路径（`/v1/chat/completions` 等）原样透传。
+发出去，再把回答翻回 Messages 返回。其余路径（`/v1/chat/completions` 等）默认原样透传；
+原生 `POST /v1/responses` 可显式开启下述无状态兼容模式。
 
 用途：让只支持 OpenAI 协议的上游（例如只接受纯净 Chat Completions 的网关）
 也能给 Claude Code 之类的 Messages 客户端用；同时上游返回什么就透传什么，
@@ -60,6 +61,8 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 | `MODEL_MAP` | 空 | JSON 对象，客户端模型名 → 上游模型名，例如 `{"deepseek-v4.1-flash-1017-tj":"deepseek-ai/DeepSeek-V4.1-Flash-1017"}` |
 | `PASS_REASONING_EFFORT` | `true` | 是否把 `output_config.effort` 转成 `reasoning_effort` |
 | `UPSTREAM_API` | `chat_completions` | `/v1/messages` 的上游协议：`chat_completions`（默认）或 `responses`（调用 `/v1/responses`）。docker compose 部署时必须改 `.env`，并在改完后重建容器 |
+| `RESPONSES_STATELESS` | `false` | 仅原生 `POST /v1/responses`：删除顶层 `previous_response_id` 和 `conversation`；客户端必须发送完整历史，不保证解除上游轮数限制。接受 true/false（忽略大小写和两端空白），其他非空值启动时报错 |
+| `RESPONSES_STATELESS_DROP_HEADERS` | 空 | 仅在上述模式开启时删除显式选择的会话头，逗号分隔；只支持 `Session-Id`、`X-Session-Id`、`Conversation-Id`、`X-Conversation-Id`（忽略大小写、去重、忽略空项），其他名称即使模式关闭也会导致启动报错 |
 | `UPSTREAM_TIMEOUT` | `10m` | 非流式请求超时 |
 | `UPSTREAM_PROXY` | 空 | 上游代理，可写 `192.168.31.109:7890`（裸 host:port 自动按 http 处理）或 `http://host.docker.internal:7890`；留空时用容器里的 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`，都没有就直连 |
 | `LOG_BODIES` | `false` | 是否打印转换后的上游请求体（默认关闭，避免日志把磁盘写满） |
@@ -72,7 +75,52 @@ UPSTREAM_BASE_URL=https://api.example.com UPSTREAM_API_KEY=sk-xxx go run .
 | `POST /v1/messages` | 默认 Messages → Chat Completions，设置 `UPSTREAM_API=responses` 后改走 OpenAI Responses API；回答均转回 Messages（支持非流式和流式响应） |
 | `POST /v1/messages/count_tokens` | 按请求体长度粗估 token 数 |
 | `GET /healthz` | 健康检查 |
+| `POST /v1/responses` | 默认原样透传；`RESPONSES_STATELESS=true` 时先删除上述续链字段和显式配置的会话头，响应仍透传 |
 | 其他所有路径 | 原样透传到 `UPSTREAM_BASE_URL`（含 `/v1/chat/completions` 流式） |
+
+## 原生 Responses 无状态兼容模式
+
+此开关用于受控比较显式会话关联信息对上游的影响，**不是上游十轮限制的已验证修复**。
+`/v1/messages` 转换本来就不发送这些关联信息，但仍可能遇到上游
+`session_turn_limit_exceeded`。开启本模式不会改变 Messages 转换，也不受
+`UPSTREAM_API` 选用 Chat Completions 还是 Responses 影响。
+
+启用前，客户端必须每次发送所需的**完整历史、instructions、工具调用与工具结果**。
+只发送新增消息、依赖 `previous_response_id`、`conversation` 或服务端 item reference
+取回历史的客户端不适用：bridge 没有会话存储，不能自动还原缺失上下文。
+`previous_response_id` 是上游生成的引用，不能随机伪造来充当新会话。
+
+在 `.env` 中设置：
+
+```dotenv
+RESPONSES_STATELESS=true
+# 可选，只有确认上游使用这些头关联会话时才选填；留空不删任何头
+RESPONSES_STATELESS_DROP_HEADERS=X-Session-Id,X-Conversation-Id
+```
+
+首版只支持配置表中的四个精确 header 名称，不支持任意名称或通配符；该名单不表示
+已证实上游识别这些头。需要其他头时应先确认其语义，再扩展实现。认证、Cookie、
+租户和渠道路由头不在删除范围内。
+
+容器须运行包含本功能的新版本镜像，并重新创建以加载环境变量，例如
+`docker compose pull && docker compose up -d --force-recreate`（使用已发布镜像时）。
+启动日志的 `responses_stateless true/false` 表示实际生效状态。恢复默认只需设置
+`RESPONSES_STATELESS=false` 后重新创建容器；header 列表单独配置不生效。
+
+启用后的请求侧行为：
+
+- 只处理原生、精确匹配的 `POST /v1/responses`；只删**顶层**的 `previous_response_id`
+  和 `conversation`，以及显式选中的会话头。不改模型、不截断 `input`，不动嵌套工具 ID、
+  instructions、metadata、user、store 或未知字段，不自动设置 `store=false`。
+- 没有上述顶层字段时保留原始 body 字节；实际删除字段时会重新编码顶层 JSON 对象。
+- 必须是单个非 null JSON 对象，且不能有重复顶层键；非法 JSON、其他根类型、尾随文档
+  或读取失败返回 HTTP 400。body 上限为 64 MiB，超限返回 413，不会截断后转发。
+- 不支持非 identity 的 `Content-Encoding` 或请求 trailers，返回 415。需要 body 签名的
+  请求不适用：实际重写时若含 `Content-MD5`、`Digest`、`Content-Digest`、`Repr-Digest`、
+  `Signature` 或 `Signature-Input`，返回 415，而不是转发失效摘要。这不是通用签名验证器。
+- 上述本地拒绝都发生在调用上游前；默认关闭时不新增这些解析与限制。
+- 不生成 response/session ID，不改响应 ID，不因十轮错误换标识或自动重试。
+  普通 JSON、HTTP 错误和 SSE 都沿用原代理透传，不修补 Messages 转换中的流式错误行为。
 
 ## 走代理
 
